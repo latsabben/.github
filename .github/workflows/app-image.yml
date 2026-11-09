@@ -1,0 +1,62 @@
+name: App image
+on:
+  workflow_call:
+    secrets:
+      DOKPLOY_DEPLOY_WEBHOOK:
+        required: false
+    outputs:
+      digest:
+        description: Published immutable image digest.
+        value: ${{ jobs.image.outputs.digest }}
+permissions:
+  contents: read
+  packages: write
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: tags
+        env:
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          REF: ${{ github.ref }}
+        run: |
+          image="ghcr.io/${REPOSITORY,,}"
+          echo "immutable=$image:sha-$SHA" >> "$GITHUB_OUTPUT"
+          if [ "$REF" = refs/heads/main ]; then
+            echo "main=$image:main" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        id: build
+        with:
+          context: .
+          push: true
+          build-args: GIT_SHA=${{ github.sha }}
+          tags: |
+            ${{ steps.tags.outputs.immutable }}
+            ${{ steps.tags.outputs.main }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: printf 'Image digest `%s`\n' "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+      - name: Deploy staging
+        if: github.ref == 'refs/heads/main'
+        env:
+          DEPLOY_WEBHOOK: ${{ secrets.DOKPLOY_DEPLOY_WEBHOOK }}
+        run: |
+          if [ -n "$DEPLOY_WEBHOOK" ]; then
+            curl -fsS -o /dev/null -X POST "$DEPLOY_WEBHOOK" 2>/dev/null
+          fi

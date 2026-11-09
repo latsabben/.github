@@ -1,0 +1,54 @@
+name: App CI
+on:
+  workflow_call:
+    inputs:
+      postgres:
+        type: boolean
+        default: false
+      node:
+        type: string
+        default: '22'
+      bun:
+        type: string
+        default: '1.4.4'
+      prepare:
+        description: Trusted repository preparation, run before checks (migrations and fixtures).
+        type: string
+        default: ''
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: ${{ inputs.postgres && 'postgres:18' || '' }}
+        env:
+          POSTGRES_USER: hubben
+          POSTGRES_PASSWORD: hubben
+          POSTGRES_DB: hubben
+        ports:
+          - 54329:5432
+        options: >-
+          --health-cmd "pg_isready -U hubben -d hubben"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: ${{ inputs.postgres && 'postgres://hubben:hubben@127.0.0.1:54329/hubben' || '' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: ${{ inputs.bun }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ inputs.node }}
+      - run: bun install --frozen-lockfile
+      - if: inputs.prepare != ''
+        env:
+          PREPARE: ${{ inputs.prepare }}
+        run: bash -e -o pipefail -c "$PREPARE"
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun run agents:lint
+      - run: bun run test
+      - run: bun run build
